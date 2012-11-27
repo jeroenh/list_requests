@@ -7,7 +7,7 @@ the script.
 For now the script can only handle the approve and discard actions.
 
 Intended usage is to run this script using sudo on the local machine that runs
-the MailMan lists. It must be installed in the mailman/bin folder.
+the MailMan lists. It must be installed in the `mailman/bin` folder.
 
 Example session:
 
