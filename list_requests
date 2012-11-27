@@ -1,0 +1,190 @@
+#! /usr/bin/python
+#
+# Copyright (C) 1998-2011 by the Free Software Foundation, Inc.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+# USA.
+
+"""Check for pending admin requests and print the results.
+
+Usage: %(PROGRAM)s [options]
+
+Options:
+
+    -l <listname>/--list=<listname>
+        List requests for the <listname> list.  May be repeated for multiple
+        lists.  The default is to do all lists.
+
+    -v/--verbose
+        Adds the request ID to the output for each request.
+
+    -h/--help
+        Print this message and exit.
+
+This script must run from Mailman's bin/ directory.
+"""
+
+import sys
+import time
+import getopt
+from types import UnicodeType
+
+import paths
+
+# Import this after paths so we get Mailman's copy of the email package
+from email.Charset import Charset
+
+from Mailman import mm_cfg
+from Mailman import Errors
+from Mailman import Utils
+from Mailman import MailList
+from Mailman import Message
+from Mailman import i18n
+
+NL = '\n'
+PROGRAM = sys.argv[0]
+
+_ = i18n._
+i18n.set_language(mm_cfg.DEFAULT_SERVER_LANGUAGE)
+
+now = time.time()
+
+
+
+def usage(code, msg=''):
+    if code:
+        fd = sys.stderr
+    else:
+        fd = sys.stdout
+    print >> fd, _(__doc__)
+    if msg:
+        print >> fd, msg
+    sys.exit(code)
+
+
+
+def main():
+    global verbose
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], 'l:vh',
+                                   ['list=', 'verbose', 'help'])
+    except getopt.error, msg:
+        usage(1, msg)
+
+    lists = []
+    verbose = False
+    for opt, arg in opts:
+        if opt in ('-h', '--help'):
+            usage(0)
+        if opt in ('-l', '--list'):
+            lists.append(arg.lower())
+        if opt in ('-v', '--verbose'):
+            verbose = True
+
+    if args:
+        usage(1)
+
+    if not lists:
+        lists = Utils.list_names()
+    for name in lists:
+        # the list must be locked in order to open the requests database
+        try:
+            mlist = MailList.MailList(name)
+        except Errors.MMUnknownListError:
+            print >> sys.stderr, '%s: Unknown List' % name
+            continue
+        try:
+            count = mlist.NumRequestsPending()
+            if count:
+                i18n.set_language(mlist.preferred_language)
+                realname = mlist.real_name
+                text = pending_requests(mlist)
+                subject = _(
+                    '%(count)d %(realname)s moderator request(s) waiting')
+                print subject + '\n' + text + '\n'
+        finally:
+            mlist.Unlock()
+
+
+
+
+def pending_requests(mlist):
+    # Must return a byte string
+    lcset = Utils.GetCharSet(mlist.preferred_language)
+    pending = []
+    first = 1
+    for id in mlist.GetSubscriptionIds():
+        if first:
+            pending.append(_('Pending subscriptions:'))
+            first = 0
+        when, addr, fullname, passwd, digest, lang = mlist.GetRecord(id)
+        if fullname:
+            if isinstance(fullname, UnicodeType):
+                fullname = fullname.encode(lcset, 'replace')
+            fullname = ' (%s)' % fullname
+        pending.append('    %s%s %s' % (addr, fullname, time.ctime(when)))
+        if verbose:
+            pending.append('        %s' % id)
+    first = 1
+    for id in mlist.GetUnsubscriptionIds():
+        if first:
+            pending.append(_('Pending unsubscriptions:'))
+            first = 0
+        addr = mlist.GetRecord(id)
+        pending.append('    %s' % addr)
+        if verbose:
+            pending.append('        %s' % id)
+    first = 1
+    for id in mlist.GetHeldMessageIds():
+        if first:
+            pending.append(_('\nPending posts:'))
+            first = 0
+        info = mlist.GetRecord(id)
+        when, sender, subject, reason, text, msgdata = mlist.GetRecord(id)
+        subject = Utils.oneline(subject, lcset)
+        date = time.ctime(when)
+        reason = _(reason)
+        pending.append(_("""\
+From: %(sender)s on %(date)s
+Subject: %(subject)s
+Cause: %(reason)s"""))
+        if verbose:
+            pending.append('        %s' % id)
+        pending.append('')
+    # Coerce all items in pending to a Unicode so we can join them
+    upending = []
+    charset = Utils.GetCharSet(mlist.preferred_language)
+    for s in pending:
+        if isinstance(s, UnicodeType):
+            upending.append(s)
+        else:
+            upending.append(unicode(s, charset, 'replace'))
+    # Make sure that the text we return from here can be encoded to a byte
+    # string in the charset of the list's language.  This could fail if for
+    # example, the request was pended while the list's language was French,
+    # but then it was changed to English before checkdbs ran.
+    text = u'\n'.join(upending)
+    charset = Charset(Utils.GetCharSet(mlist.preferred_language))
+    incodec = charset.input_codec or 'ascii'
+    outcodec = charset.output_codec or 'ascii'
+    if isinstance(text, UnicodeType):
+        return text.encode(outcodec, 'replace')
+    # Be sure this is a byte string encodeable in the list's charset
+    utext = unicode(text, incodec, 'replace')
+    return utext.encode(outcodec, 'replace')
+
+
+if __name__ == '__main__':
+    main()
