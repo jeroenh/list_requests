@@ -27,9 +27,6 @@ Options:
         List requests for the <listname> list.  May be repeated for multiple
         lists.  The default is to do all lists.
 
-    -v/--verbose
-        Adds the request ID to the output for each request.
-
     -h/--help
         Print this message and exit.
 
@@ -62,7 +59,6 @@ i18n.set_language(mm_cfg.DEFAULT_SERVER_LANGUAGE)
 now = time.time()
 
 
-
 def usage(code, msg=''):
     if code:
         fd = sys.stderr
@@ -74,24 +70,19 @@ def usage(code, msg=''):
     sys.exit(code)
 
 
-
 def main():
-    global verbose
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'l:vh',
-                                   ['list=', 'verbose', 'help'])
+        opts, args = getopt.getopt(sys.argv[1:], 'l:h',
+                                   ['list=', 'help'])
     except getopt.error, msg:
         usage(1, msg)
 
     lists = []
-    verbose = False
     for opt, arg in opts:
         if opt in ('-h', '--help'):
             usage(0)
         if opt in ('-l', '--list'):
             lists.append(arg.lower())
-        if opt in ('-v', '--verbose'):
-            verbose = True
 
     if args:
         usage(1)
@@ -110,20 +101,31 @@ def main():
             if count:
                 i18n.set_language(mlist.preferred_language)
                 realname = mlist.real_name
-                text = pending_requests(mlist)
+                text,ids = pending_requests(mlist)
                 subject = _(
                     '%(count)d %(realname)s moderator request(s) waiting')
                 print subject + '\n' + text + '\n'
+                for id in ids:
+                    reply = raw_input("Approve message %s? (yN) " % id)
+                    if reply.lower().startswith("y"):
+                        mlist.HandleRequest(x, mm_cfg.APPROVE)
+                        m.Save()
+                    else:
+                        reply = raw_input("Discard message %s? (Yn) " % id)
+                        if not reply.lower().startswith("n"):
+                            mlist.HandleRequest(x, mm_cfg.DISCARD)
+                            m.Save()
+                            
         finally:
             mlist.Unlock()
 
 
 
-
 def pending_requests(mlist):
     # Must return a byte string
     lcset = Utils.GetCharSet(mlist.preferred_language)
     pending = []
+    pendingIds = []
     first = 1
     for id in mlist.GetSubscriptionIds():
         if first:
@@ -134,18 +136,14 @@ def pending_requests(mlist):
             if isinstance(fullname, UnicodeType):
                 fullname = fullname.encode(lcset, 'replace')
             fullname = ' (%s)' % fullname
-        pending.append('    %s%s %s' % (addr, fullname, time.ctime(when)))
-        if verbose:
-            pending.append('        %s' % id)
+        pending.append('> id %s : %s%s %s' % (id, addr, fullname, time.ctime(when)))
     first = 1
     for id in mlist.GetUnsubscriptionIds():
         if first:
             pending.append(_('Pending unsubscriptions:'))
             first = 0
         addr = mlist.GetRecord(id)
-        pending.append('    %s' % addr)
-        if verbose:
-            pending.append('        %s' % id)
+        pending.append('> id %s : %s' % (id, addr))
     first = 1
     for id in mlist.GetHeldMessageIds():
         if first:
@@ -156,13 +154,14 @@ def pending_requests(mlist):
         subject = Utils.oneline(subject, lcset)
         date = time.ctime(when)
         reason = _(reason)
-        pending.append(_("""\
-From: %(sender)s on %(date)s
-Subject: %(subject)s
-Cause: %(reason)s"""))
-        if verbose:
-            pending.append('        %s' % id)
-        pending.append('')
+        pendingIds.append(id)
+        pending.append('> id %s : %s on %s , Subject: %s , Reason: %s' % (id, sender, date, subject, reason))
+#        pending.append(_("""\
+#From: %(sender)s on %(date)s
+#Subject: %(subject)s
+#Cause: %(reason)s"""))
+        #pending.append('        %s' % id)
+        #pending.append('')
     # Coerce all items in pending to a Unicode so we can join them
     upending = []
     charset = Utils.GetCharSet(mlist.preferred_language)
@@ -183,8 +182,7 @@ Cause: %(reason)s"""))
         return text.encode(outcodec, 'replace')
     # Be sure this is a byte string encodeable in the list's charset
     utext = unicode(text, incodec, 'replace')
-    return utext.encode(outcodec, 'replace')
+    return utext.encode(outcodec, 'replace'),pendingIds
 
-
 if __name__ == '__main__':
     main()
